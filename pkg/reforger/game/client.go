@@ -7,8 +7,7 @@ import (
 )
 
 const (
-	userAgent = "Arma Reforger/" + constants.Version + " (Client; Windows)"
-	baseUrl   = "https://api-ar-game.bistudio.com/game-api/api/v1.0"
+	baseUrl = "https://api-ar-game.bistudio.com/game-api/api/v1.0"
 )
 
 type Client struct {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -23,23 +22,33 @@ var ErrNotLoaded = errors.New("config not loaded")
 var loaded atomic.Bool
 var config Config
 
+// Load reads the config file. A missing or empty file is not an error: the
+// config is then loaded with zero values and IsValid reports false.
 func Load() error {
-	f, err := initAndGetConfigFile()
+	path, err := configPath()
 	if err != nil {
-		return fmt.Errorf("could not initialize config file: %w", err)
+		return err
 	}
-	defer f.Close()
 
-	err = json.NewDecoder(f).Decode(&config)
+	b, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return SaveConfig(Config{})
+		if errors.Is(err, os.ErrNotExist) {
+			config = Config{}
+			loaded.Store(true)
+			return nil
 		}
-		return fmt.Errorf("could not read config file: %w", err)
+		return fmt.Errorf("could not read config file %s: %w", path, err)
 	}
 
-	loaded.Store(true)
+	var cfg Config
+	if len(b) > 0 {
+		if err = json.Unmarshal(b, &cfg); err != nil {
+			return fmt.Errorf("could not parse config file %s: %w", path, err)
+		}
+	}
 
+	config = cfg
+	loaded.Store(true)
 	return nil
 }
 
@@ -47,11 +56,15 @@ func IsLoaded() bool {
 	return loaded.Load()
 }
 
+// Get returns a copy of the current config.
+func Get() Config {
+	return config
+}
+
 func GameDir() (string, error) {
 	if !IsLoaded() {
 		return "", ErrNotLoaded
 	}
-
 	return config.GameDir, nil
 }
 
@@ -59,7 +72,6 @@ func AddonsDir() (string, error) {
 	if !IsLoaded() {
 		return "", ErrNotLoaded
 	}
-
 	return config.AddonsDir, nil
 }
 
@@ -67,28 +79,32 @@ func IsValid() bool {
 	if !IsLoaded() {
 		return false
 	}
-
-	if err := Validate(config); err != nil {
-		return false
-	}
-
-	return true
+	return Validate(config) == nil
 }
 
 func Validate(cfg Config) error {
-	if cfg.GameDir == "" || cfg.AddonsDir == "" {
-		return errors.New("invalid dirs")
-	}
-
-	if err := steam.ValidateSteamAppIDPresence(cfg.GameDir); err != nil {
-		return fmt.Errorf("unable to check that %s contains steam_appid.txt, please try again", cfg.GameDir)
-	}
-
-	if _, err := utils.ValidatePathIsDir(cfg.AddonsDir); err != nil {
+	if err := ValidateGameDir(cfg.GameDir); err != nil {
 		return err
 	}
+	return ValidateAddonsDir(cfg.AddonsDir)
+}
 
+func ValidateGameDir(dir string) error {
+	if dir == "" {
+		return errors.New("game directory is not set")
+	}
+	if err := steam.ValidateSteamAppIDPresence(dir); err != nil {
+		return fmt.Errorf("%s does not look like the Arma Reforger directory: %w", dir, err)
+	}
 	return nil
+}
+
+func ValidateAddonsDir(dir string) error {
+	if dir == "" {
+		return errors.New("addons directory is not set")
+	}
+	_, err := utils.ValidatePathIsDir(dir)
+	return err
 }
 
 func SaveConfig(cfg Config) error {
@@ -96,49 +112,54 @@ func SaveConfig(cfg Config) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	f, err := initAndGetConfigFile()
+	path, err := configPath()
 	if err != nil {
-		return fmt.Errorf("could not initialize config file: %w", err)
+		return err
 	}
-	defer f.Close()
-
-	if off, err := f.Seek(0, io.SeekStart); err != nil || off != 0 {
-		return fmt.Errorf("could not seek to beginning of config file: %w", err)
-	}
-	if err = f.Truncate(0); err != nil {
-		return fmt.Errorf("could not truncate config file: %w", err)
+	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("could not create config directory: %w", err)
 	}
 
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("could not encode config file: %w", err)
-
+		return fmt.Errorf("could not encode config: %w", err)
 	}
-	if _, err = f.Write(b); err != nil {
+
+	// Write to a temp file and rename so a crash never leaves a truncated config.
+	tmp, err := os.CreateTemp(filepath.Dir(path), "config-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("could not create temp config file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	_, werr := tmp.Write(b)
+	cerr := tmp.Close()
+	if err = errors.Join(werr, cerr); err != nil {
+		os.Remove(tmpPath)
 		return fmt.Errorf("could not write config file: %w", err)
+	}
+	if err = os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("could not set config file permissions: %w", err)
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("could not save config file: %w", err)
 	}
 
 	config = cfg
 	loaded.Store(true)
-
 	return nil
 }
 
-func initAndGetConfigFile() (*os.File, error) {
-	path, err := os.UserConfigDir()
-	if err != nil {
-		return nil, fmt.Errorf("could not get user config dir: %w", err)
-	}
-	path = filepath.Join(path, "armsync")
-	if err = os.MkdirAll(path, os.ModePerm); err != nil {
-		return nil, fmt.Errorf("could not create config directory %s: %w", path, err)
-	}
-	path = filepath.Join(path, "config.json")
+// Path returns the location of the config file.
+func Path() (string, error) {
+	return configPath()
+}
 
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, os.ModePerm)
+func configPath() (string, error) {
+	dir, err := os.UserConfigDir()
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("could not get user config dir: %w", err)
 	}
-
-	return f, nil
+	return filepath.Join(dir, "armsync", "config.json"), nil
 }

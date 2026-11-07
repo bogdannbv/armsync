@@ -416,14 +416,14 @@ func (m Model) initDeps() tea.Msg {
 			Msg: "Could not get a Steam session ticket. Make sure Steam is running.",
 		}
 	}
-	log.Debug("got steam session ticket", "ticket", ticket)
+	log.Debug("got steam session ticket")
 
 	a := auth.New(ticket)
 
 	// Important: if we try to create an access token too fast Bohemia's backend fails to autehnticate/validate it.
 	time.Sleep(150 * time.Millisecond)
 
-	at, err := a.GetAccessToken(m.ctx)
+	_, err = a.GetAccessToken(m.ctx)
 	release()
 	if err != nil {
 		log.Error("failed to get access token", "err", err)
@@ -431,7 +431,7 @@ func (m Model) initDeps() tea.Msg {
 			Msg: "Could not get access token. Please try again later.",
 		}
 	}
-	log.Debug("got access token", "token", at)
+	log.Debug("got access token")
 
 	ws := workshop.New(a)
 

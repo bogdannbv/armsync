@@ -1,17 +1,8 @@
 package config
 
-import (
-	"path/filepath"
+import "github.com/bogdannbv/armsync/internal/steam"
 
-	"github.com/bogdannbv/armsync/internal/steam"
-	"github.com/bogdannbv/armsync/internal/utils"
-)
-
+// FindGameDir returns the detected Arma Reforger installation directory.
 func FindGameDir() (string, error) {
-	dir, err := steam.FindSteamAppsDir()
-	if err != nil {
-		return "", err
-	}
-	dir = filepath.Join(dir, "common", "Arma Reforger")
-	return utils.ValidatePathIsDir(dir)
+	return steam.FindGameDir()
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 
 	"github.com/bogdannbv/armsync/pkg/reforger/constants"
@@ -86,8 +87,8 @@ func ValidateSteamAppIDPresence(path string) error {
 		return err
 	}
 
-	if string(c) != constants.AppID {
-		return fmt.Errorf("wrong app id, expected %s, got %s", constants.AppID, string(c))
+	if got := strings.TrimSpace(string(c)); got != constants.AppID {
+		return fmt.Errorf("wrong app id, expected %s, got %s", constants.AppID, got)
 	}
 	return nil
 }
